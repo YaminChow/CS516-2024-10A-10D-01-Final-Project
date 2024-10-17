@@ -15,7 +15,7 @@
 * Backend: Lambda, API gateway
 * Database: DynamoDB
 4. Implment CloudFormation template (yaml) for the above resources.
-5. Implement CI/CD for Frontend and add it to the above template.
+5. (Bonus): Implement CI/CD for Frontend and add it to the above template.
 ## Time
 1. Upload the project to GitHub by 10:00 PM of the day before the presentation.
 * FrontEnd
