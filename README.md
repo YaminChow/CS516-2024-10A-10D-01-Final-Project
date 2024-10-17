@@ -1,4 +1,7 @@
 # CS516-2024-10A-10D-01-Final-Project
+## Important Note
+* It is an individual project, not group project. 
+* You must work on your own, without copying any work from others.
 ## Requirements
 1. Develop an Auth application with the following features
 * SignUp: Users can use this feature to register an account which contains email (as ID), password, name, profileImage.
