@@ -2,10 +2,11 @@ Read Me
 
 - Upload backend code in S3 bucket name “backend-userservices”.
 - Upload yml file
+- Deploy APIgateway
 - Updated backend url in frontend login.js, signup.js and profile.js. Then,
   npm install
   npm run build
-- Upload build in frontend S3 bucket.
+- Upload frontend build in S3 bucket.
 
 Frontend: https://github.com/YaminChow/final-project-cloud
 Backend: https://github.com/YaminChow/Final-Project-Cloud-Backend
