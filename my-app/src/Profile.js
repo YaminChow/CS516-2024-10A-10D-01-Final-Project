@@ -13,7 +13,7 @@ const Profile = () => {
     const fetchProfile = async () => {
       try {
         const response = await axios.get(
-          `https://d82i0o71bh.execute-api.us-east-1.amazonaws.com/dev/getImage?email=${email}`
+          `https://zmxvz1n57l.execute-api.us-east-1.amazonaws.com/dev/getImage?email=${email}`
         );
         setProfile(response.data);
       } catch (error) {
@@ -39,7 +39,7 @@ const Profile = () => {
     try {
       // Request a pre-signed URL to upload the file
       const response = await axios.post(
-        "https://d82i0o71bh.execute-api.us-east-1.amazonaws.com/dev/uploadImage",
+        "https://zmxvz1n57l.execute-api.us-east-1.amazonaws.com/dev/uploadImage",
         {
           filename: selectedFile.name,
           contentType: selectedFile.type,

@@ -14,7 +14,7 @@ const Login = ({ setCurrentUser }) => {
     try {
       // Call the API Gateway endpoint for login
       const response = await fetch(
-        "https://d82i0o71bh.execute-api.us-east-1.amazonaws.com/dev/login",
+        "https://zmxvz1n57l.execute-api.us-east-1.amazonaws.com/dev/login",
         {
           method: "POST",
           headers: {

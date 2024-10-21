@@ -15,18 +15,15 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      Tags:
-        - Key: Name
-          Value: !Ref "AWS::StackName"
 
-  # Origin Access Identity (OAI) for CloudFront to access S3 securely
+  # Origin Access Identity (OAI) for CloudFront
   CloudFrontOAI:
     Type: "AWS::CloudFront::CloudFrontOriginAccessIdentity"
     Properties:
       CloudFrontOriginAccessIdentityConfig:
         Comment: "OAI for CloudFront to access S3"
 
-  # S3 Bucket Policy to allow CloudFront OAI to access the bucket
+  # Bucket Policy for Frontend (YeeFrontend) allowing only CloudFront OAI
   YeeFrontendPolicy:
     Type: "AWS::S3::BucketPolicy"
     Properties:
@@ -71,24 +68,35 @@ Resources:
     Type: "AWS::S3::Bucket"
     Properties:
       BucketName: !Sub "${AWS::StackName}-profile-images"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
       CorsConfiguration:
         CorsRules:
-          - AllowedOrigins: ["*"]
-            AllowedMethods: ["GET", "PUT", "POST"]
-            AllowedHeaders: ["*"]
-
-  # DynamoDB Table for storing user data
-  UsersTable:
-    Type: "AWS::DynamoDB::Table"
+          - AllowedOrigins:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedHeaders:
+              - "*"
+            MaxAge: 3000
+  ImageStorageBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
     Properties:
-      TableName: "Users"
-      AttributeDefinitions:
-        - AttributeName: "email"
-          AttributeType: "S"
-      KeySchema:
-        - AttributeName: "email"
-          KeyType: "HASH"
-      BillingMode: PAY_PER_REQUEST
+      Bucket: !Ref ImageStorageBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${ImageStorageBucket.Arn}/*"
 
   # Lambda Execution Role with full access to DynamoDB and S3
   LambdaExecutionRole:
@@ -110,12 +118,14 @@ Resources:
               # Full access to all DynamoDB tables
               - Effect: "Allow"
                 Action:
-                  - "*"
+                  - "dynamodb:*"
                 Resource: "arn:aws:dynamodb:*:*:table/*"
               # Full access to all S3 buckets
               - Effect: "Allow"
                 Action:
-                  - "*"
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                  - "s3:DeleteObject"
                 Resource: "arn:aws:s3:::*"
               # Permissions for CloudWatch Logs (for Lambda logging)
               - Effect: "Allow"
@@ -124,6 +134,19 @@ Resources:
                   - "logs:CreateLogStream"
                   - "logs:PutLogEvents"
                 Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+  # DynamoDB Table for storing user data
+  UsersTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: "Users"
+      AttributeDefinitions:
+        - AttributeName: "email"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "email"
+          KeyType: "HASH"
+      BillingMode: PAY_PER_REQUEST
+
   # Permission for POST methods (Signup, Login, Upload Image)
   LambdaApiGatewayInvokePermissionPost:
     Type: "AWS::Lambda::Permission"
@@ -133,14 +156,14 @@ Resources:
       Principal: "apigateway.amazonaws.com"
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${UserAPI}/*/POST/*"
 
-# Permission for GET methods (Get Image)
-LambdaApiGatewayInvokePermissionGet:
-  Type: "AWS::Lambda::Permission"
-  Properties:
-    Action: "lambda:InvokeFunction"
-    FunctionName: !GetAtt BackendLambda.Arn
-    Principal: "apigateway.amazonaws.com"
-    SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${UserAPI}/*/GET/*"
+  # Permission for GET methods (Get Image)
+  LambdaApiGatewayInvokePermissionGet:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt BackendLambda.Arn
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${UserAPI}/*/GET/getImage"
 
   # Lambda function to handle backend logic
   BackendLambda:
@@ -158,9 +181,9 @@ LambdaApiGatewayInvokePermissionGet:
           TABLE_NAME: !Ref UsersTable
           BUCKET_NAME: !Ref ImageStorageBucket
       Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: 128
 
   # API Gateway for exposing backend Lambda function
-  # API Gateway
   UserAPI:
     Type: "AWS::ApiGateway::RestApi"
     Properties:
@@ -224,14 +247,17 @@ LambdaApiGatewayInvokePermissionGet:
   ApiGatewayGetImageMethod:
     Type: "AWS::ApiGateway::Method"
     Properties:
+      AuthorizationType: NONE
       RestApiId: !Ref UserAPI
       ResourceId: !Ref ApiGatewaygetImageResource
       HttpMethod: "GET"
-      AuthorizationType: "NONE"
       Integration:
-        Type: "AWS_PROXY"
-        IntegrationHttpMethod: "GET"
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations
+            - LambdaArn: !GetAtt BackendLambda.Arn
         IntegrationResponses:
           - StatusCode: "200"
             ResponseParameters:
@@ -239,7 +265,9 @@ LambdaApiGatewayInvokePermissionGet:
             ResponseTemplates:
               application/json: "{}"
       MethodResponses:
-        - StatusCode: "200"
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: false
   # POST /login method
@@ -357,16 +385,16 @@ LambdaApiGatewayInvokePermissionGet:
           - StatusCode: "200"
             ResponseParameters:
               method.response.header.Access-Control-Allow-Origin: "'*'"
-              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
               method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
             ResponseTemplates:
               application/json: "{}"
       MethodResponses:
         - StatusCode: "200"
           ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: false
-            method.response.header.Access-Control-Allow-Methods: false
-            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Headers: true
 
   # OPTIONS /uploadImage method for CORS
   ApiGatewayOptionsUploadImageMethod:
