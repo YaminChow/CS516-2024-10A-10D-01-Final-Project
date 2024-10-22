@@ -8,5 +8,5 @@ Read Me
   npm run build
 - Upload frontend build in S3 bucket.
 
-Frontend: https://github.com/YaminChow/final-project-cloud
+Frontend: https://github.com/YaminChow/Final-project-cloud-frontend
 Backend: https://github.com/YaminChow/Final-Project-Cloud-Backend

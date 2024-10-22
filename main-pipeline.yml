@@ -1,0 +1,427 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Full stack deployment for UserService with API Gateway, Lambda, S3, CloudFront, and DynamoDB"
+
+Parameters:
+  FrontendBucketName:
+    Type: String
+    Description: "project-frontend-pipeline"
+    Default: "project-frontend-pipeline" # Replace with your existing bucket name
+
+Resources:
+  # Origin Access Identity (OAI) for CloudFront
+  CloudFrontOAI:
+    Type: "AWS::CloudFront::CloudFrontOriginAccessIdentity"
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: "OAI for CloudFront to access S3"
+
+  # CloudFront Distribution for serving the frontend (React app)
+  CloudFrontDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !Sub "${FrontendBucketName}.s3.amazonaws.com" # Correct S3 bucket format
+            Id: S3Origin
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOAI}"
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: "redirect-to-https"
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: "false"
+        DefaultRootObject: "index.html"
+        Enabled: true
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+  # Bucket Policy for Frontend (existing bucket) allowing only CloudFront OAI
+  YeeFrontendPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: "project-frontend-pipeline" # Reference existing frontend bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              CanonicalUser: !GetAtt CloudFrontOAI.S3CanonicalUserId
+            Action: "s3:GetObject"
+            Resource: !Sub "${FrontendBucketName}/*"
+
+  # S3 Bucket for storing user-uploaded images (Backend)
+  ImageStorageBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: "image-storage-pipeline" # Updated backend bucket name
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedHeaders:
+              - "*"
+            MaxAge: 3000
+
+  ImageStorageBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref ImageStorageBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${ImageStorageBucket.Arn}/*"
+
+  # Lambda Execution Role with full access to DynamoDB and S3
+  LambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "userService-pipeline-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "LambdaAllS3AndDynamoDBPolicyPipeline"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Full access to all DynamoDB tables
+              - Effect: "Allow"
+                Action:
+                  - "dynamodb:*"
+                Resource: "arn:aws:dynamodb:*:*:table/*"
+              # Full access to all S3 buckets
+              - Effect: "Allow"
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                  - "s3:DeleteObject"
+                Resource: "arn:aws:s3:::*"
+              # Permissions for CloudWatch Logs (for Lambda logging)
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+
+  # DynamoDB Table for storing user data
+  UsersTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: "Userspipeline" # Updated DynamoDB table name
+      AttributeDefinitions:
+        - AttributeName: "email"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "email"
+          KeyType: "HASH"
+      BillingMode: PAY_PER_REQUEST
+
+  # Permission for POST methods (Signup, Login, Upload Image)
+  LambdaApiGatewayInvokePermissionPost:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt BackendLambda.Arn
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${UserAPI}/*/POST/*"
+
+  # Permission for GET methods (Get Image)
+  LambdaApiGatewayInvokePermissionGet:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt BackendLambda.Arn
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${UserAPI}/*/GET/getImage"
+
+  # Lambda function to handle backend logic
+  BackendLambda:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: "UserBackendPipelineFunction" # Updated Lambda function name
+      Runtime: "nodejs18.x" # Ensure this is the correct runtime for your Node.js version
+      Handler: "index.handler" # Make sure this matches the entry point in your code
+      Code:
+        S3Bucket: "backend-node-pipeline" # The bucket containing the Lambda zip file
+        S3Key: "my-nodejs-app.zip" # The zip file containing your Lambda code
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref UsersTable
+          BUCKET_NAME: !Ref ImageStorageBucket
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: 128
+
+  # API Gateway for exposing backend Lambda function
+  UserAPI:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: "UserpipelineAPI" # Updated API Gateway name
+      FailOnWarnings: true
+  # /login resource
+  ApiGatewayLoginResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      ParentId: !GetAtt UserAPI.RootResourceId
+      PathPart: "login"
+      RestApiId: !Ref UserAPI
+
+  # /signup resource
+  ApiGatewaySignupResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      ParentId: !GetAtt UserAPI.RootResourceId
+      PathPart: "signup"
+      RestApiId: !Ref UserAPI
+  # /getImage resource
+  ApiGatewaygetImageResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      ParentId: !GetAtt UserAPI.RootResourceId
+      PathPart: "getImage"
+      RestApiId: !Ref UserAPI
+
+  # /uploadImage resource
+  ApiGatewayuploadImageResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      ParentId: !GetAtt UserAPI.RootResourceId
+      PathPart: "uploadImage"
+      RestApiId: !Ref UserAPI
+
+  # POST /login method
+  ApiGatewayPostLoginMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref UserAPI
+      ResourceId: !Ref ApiGatewayLoginResource
+      HttpMethod: "POST"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS_PROXY"
+        IntegrationHttpMethod: "POST"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: "{}"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+  # POST /getImage method
+  ApiGatewayGetImageMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      AuthorizationType: NONE
+      RestApiId: !Ref UserAPI
+      ResourceId: !Ref ApiGatewaygetImageResource
+      HttpMethod: "GET"
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations
+            - LambdaArn: !GetAtt BackendLambda.Arn
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: "{}"
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+  # POST /login method
+  ApiGatewayPostImageMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref UserAPI
+      ResourceId: !Ref ApiGatewayuploadImageResource
+      HttpMethod: "POST"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS_PROXY"
+        IntegrationHttpMethod: "POST"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: "{}"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+  # POST /signup method
+  ApiGatewayPostSignupMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref UserAPI
+      ResourceId: !Ref ApiGatewaySignupResource
+      HttpMethod: "POST"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS_PROXY"
+        IntegrationHttpMethod: "POST"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: "{}"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+
+  # OPTIONS /login method for CORS
+  ApiGatewayOptionsLoginMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref UserAPI
+      ResourceId: !Ref ApiGatewayLoginResource
+      HttpMethod: "OPTIONS"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "MOCK"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+            ResponseTemplates:
+              application/json: "{}"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Headers: false
+
+  # OPTIONS /signup method for CORS
+  ApiGatewayOptionsSignupMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref UserAPI
+      ResourceId: !Ref ApiGatewaySignupResource
+      HttpMethod: "OPTIONS"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "MOCK"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+            ResponseTemplates:
+              application/json: "{}"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Headers: false
+
+  # OPTIONS /getImage method for CORS
+  ApiGatewayOptionsGetImageMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref UserAPI
+      ResourceId: !Ref ApiGatewaygetImageResource
+      HttpMethod: "OPTIONS"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "MOCK"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+            ResponseTemplates:
+              application/json: "{}"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # OPTIONS /uploadImage method for CORS
+  ApiGatewayOptionsUploadImageMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref UserAPI
+      ResourceId: !Ref ApiGatewayuploadImageResource
+      HttpMethod: "OPTIONS"
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "MOCK"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+            ResponseTemplates:
+              application/json: "{}"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Headers: false
+
+Outputs:
+  # CloudFront URL to access the frontend (React app)
+  CloudFrontURL:
+    Description: "URL of the CloudFront distribution for the frontend"
+    Value: !GetAtt CloudFrontDistribution.DomainName
+
+  # API Gateway Invoke URL for backend APIs
+  ApiGatewayInvokeURL:
+    Description: "Invoke URL for the API Gateway"
+    Value: !Sub "https://${UserAPI}.execute-api.${AWS::Region}.amazonaws.com/prod"
