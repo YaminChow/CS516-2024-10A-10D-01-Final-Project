@@ -40,20 +40,6 @@ Resources:
         Enabled: true
         ViewerCertificate:
           CloudFrontDefaultCertificate: true
-  # Bucket Policy for Frontend (existing bucket) allowing only CloudFront OAI
-  YeeFrontendPolicy:
-    Type: "AWS::S3::BucketPolicy"
-    Properties:
-      Bucket: "project-frontend-pipeline" # Reference existing frontend bucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: "Allow"
-            Principal:
-              CanonicalUser: !GetAtt CloudFrontOAI.S3CanonicalUserId
-            Action: "s3:GetObject"
-            Resource: !Sub "${FrontendBucketName}/*"
-
   # S3 Bucket for storing user-uploaded images (Backend)
   ImageStorageBucket:
     Type: "AWS::S3::Bucket"

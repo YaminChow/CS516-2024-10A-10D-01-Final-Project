@@ -1,7 +1,7 @@
-Read Me
+Read Me (CloudFormatting)
 
 - Upload backend code in S3 bucket name “backend-userservices”.
-- Upload yml file
+- Upload yml file in cloudformation.
 - Deploy APIgateway
 - Updated backend url in frontend login.js, signup.js and profile.js. Then,
   npm install
